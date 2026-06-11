@@ -1,0 +1,54 @@
+VCD info: dumpfile dump.vcd opened for output.
+
+=== TEST 1: Reset state ===
+  PASS    resets to 1990
+  PASS  onth resets to 1
+  PASS  ay   resets to 1
+  PASS  our  resets to 0
+  PASS  in   resets to 0
+  PASS  ec   resets to 0
+
+=== TEST 2: Register writes ===
+  PASS      year  = 2025
+  PASS         month = 6
+  PASS        day   = 11
+  PASS        hour  = 13
+  PASS        min   = 45
+  PASS         sec   = 0
+  PASS   dow   = 3 (Wed)
+ rtc_dow = 3
+
+=== TEST 3: Invalid data ===
+  PASS  id year rejected
+  PASS    year unchanged
+  PASS  d month rejected
+  PASS   month unchanged
+  PASS  id hour rejected
+  PASS    hour unchanged
+  PASS   minute rejected
+
+=== TEST 4: Rollover 23:59:58 -> 00:00:01 ===
+[tick] 2025-06-11 (dow=3) 23:59:58  | timer=0x:0x:0x
+[tick] 2025-06-11 (dow=3) 23:59:59  | timer=0x:0x:0x
+[tick] 2025-06-12 (dow=4) 00:00:00  | timer=0x:0x:0x
+  PASS  our  rolled to 0
+  PASS  in   rolled to 0
+  PASS         sec   = 1
+  PASS  ay   incremented
+hour:  0, minute= 0, second= 1, day=12
+
+=== TEST 5: Alarm trigger ===
+  PASS  s at exact match
+[tick] 2025-06-15 (dow=0) 08:00:00  | timer=0x:0x:0x
+  PASS  ilent after tick
+
+=== TEST 6: Timer countdown ===
+  PASS   not expired yet
+[tick] 2025-06-15 (dow=0) 08:00:01  | timer=00:00:03
+[tick] 2025-06-15 (dow=0) 08:00:02  | timer=00:00:02
+[tick] 2025-06-15 (dow=0) 08:00:03  | timer=00:00:01
+  PASS  ed (timer_out=1)
+
+=== Simulation complete ===
+
+tb.v:263: $finish called at 7780000 (1ps)
