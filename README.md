@@ -15,7 +15,6 @@ A synthesisable Verilog RTC module with alarm and countdown timer, targeting 50 
 ```
 time.v       — RTL source (pll, TIME_REPORTER, day_of_week)
 tb.v         — Original testbench
-tb_final.v   — Comprehensive testbench (78 checks)
 Makefile     — Build, simulate, view waveforms
 ```
 
