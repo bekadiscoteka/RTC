@@ -144,9 +144,7 @@ module TIME_REPORTER(
 
 	end
 
-	/* set rtc/timer/alarm logic */
-	reg [13:0] secure_data_in;
-	reg invalid_data_flag;
+	/* register address mapping */
 	
 	localparam	RTC_Y_ADDR=4'H0,
 			RTC_M_ADDR=4'H1,
@@ -166,50 +164,6 @@ module TIME_REPORTER(
 			TMR_MIN_ADDR=4'HD,
 			TMR_SEC_ADDR=4'HE;
 
-	always @* begin
-		secure_data_in = 0;
-		invalid_data_flag = 0;
-		if (wr_en) begin
-			case (addr)
-				RTC_Y_ADDR, ALM_Y_ADDR: begin
-					if (data_in <= 9999 && data_in >= 1990)
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-				end
-				RTC_M_ADDR, ALM_M_ADDR: begin
-					if (data_in > 0 && data_in <= 12)
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-						
-				end
-				RTC_D_ADDR, ALM_D_ADDR: begin
-					if (data_in > 0 && data_in <= maxday)
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-						
-				end
-				RTC_H_ADDR, ALM_H_ADDR, TMR_H_ADDR: begin
-					if (data_in < 24) 
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-					
-				end
-				RTC_MIN_ADDR, ALM_MIN_ADDR, TMR_MIN_ADDR: begin
-					if (data_in < 60)
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-						
-				end
-				RTC_SEC_ADDR, ALM_SEC_ADDR, TMR_SEC_ADDR: begin
-					if (data_in < 60) 
-						secure_data_in = data_in;
-					else invalid_data_flag = 1;
-						
-				end
-				default: invalid_data_flag = 1;
-			endcase
-		end
-	end
 
 	/* sequential logic */
 
@@ -218,14 +172,6 @@ module TIME_REPORTER(
 	wire rtc_day_ismax = (rtc_second >= 59) && (rtc_minute >= 59) && (rtc_hour >= 23);
 	wire rtc_month_ismax = (rtc_second >= 59) && (rtc_minute >= 59) && (rtc_hour >= 23) && (rtc_day >= maxday); 
 	wire rtc_year_ismax = (rtc_second >= 59) && (rtc_minute >= 59) && (rtc_hour >= 23) && (rtc_day >= maxday) && (rtc_month >= 12); 
-
-	always @(posedge clk_50Mhz, negedge rst_n) begin
-		if (!rst_n) 
-			error <= 0;
-		else if (invalid_data_flag)
-			error <= 1;
-		else error <= 0;
-	end
 
 	always @(posedge clk_50Mhz, negedge rst_n) begin
 		if (!rst_n) begin
@@ -242,33 +188,126 @@ module TIME_REPORTER(
 			alarm_hour <= 0;
 			alarm_minute <= 0;
 			alarm_second <= 0;
+
+			error <= 0;
 		end
-
 		else if ( wr_en ) begin
-			if ( !invalid_data_flag ) begin
-				case (addr)
-					4'h0: rtc_year <= secure_data_in[13:0];
-					4'h1: rtc_month <= secure_data_in[3:0];
-					4'h2: rtc_day <= secure_data_in[4:0];
-					4'h3: rtc_hour <= secure_data_in[4:0];
-					4'h4: rtc_minute <= secure_data_in[5:0];
-					4'h5: rtc_second <= secure_data_in[5:0];
+			case (addr)
+				RTC_Y_ADDR: begin
+					if (data_in <= 9999 && data_in >= 1990) begin
+						rtc_year <= data_in[13:0];
+						error <= 0;
+					end
+					else error <= 1; 
+				end
+				RTC_M_ADDR: begin
+					if (data_in > 0 && data_in <= 12) begin
+						rtc_month <= data_in[3:0];
+						error <= 0;
+					end
+					else error <= 1;
 
-					4'h6: alarm_year <= secure_data_in[13:0];
-					4'h7: alarm_month <= secure_data_in[3:0];
-					4'h8: alarm_day <= secure_data_in[4:0];
-					4'h9: alarm_hour <= secure_data_in[4:0];
-					4'ha: alarm_minute <= secure_data_in[5:0];
-					4'hb: alarm_second <= secure_data_in[5:0];
+				end
+				RTC_D_ADDR: begin
+					if (data_in > 0 && data_in <= maxday) begin
+						rtc_day <= data_in[4:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				RTC_H_ADDR: begin
+					if (data_in < 24) begin
+						rtc_hour <= data_in[4:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				RTC_MIN_ADDR: begin
+					if (data_in < 60) begin
+						rtc_minute <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				RTC_SEC_ADDR: begin
+					if (data_in < 60) begin
+						rtc_second <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
 
-					4'hc: timer_hour <= secure_data_in[4:0];
-					4'hd: timer_minute <= secure_data_in[5:0];
-					4'he: timer_second <= secure_data_in[5:0];
-				endcase
-			end
+				ALM_Y_ADDR: begin
+					if (data_in <= 9999 && data_in >= 1990) begin
+						alarm_year <= data_in[13:0];	
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				ALM_M_ADDR: begin
+					if (data_in > 0 && data_in <= 12) begin
+						alarm_month <= data_in[3:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				ALM_D_ADDR: begin
+					if (data_in > 0 && data_in <= maxday) begin
+						alarm_day <= data_in[4:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				ALM_H_ADDR: begin
+					if (data_in < 24) begin
+						alarm_hour <= data_in[4:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				ALM_MIN_ADDR: begin
+					if (data_in < 60) begin
+						alarm_minute <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				ALM_SEC_ADDR: begin
+					if (data_in < 60) begin
+						alarm_second <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+
+				TMR_H_ADDR: begin
+					if (data_in < 24) begin
+						timer_hour <= data_in[4:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				TMR_MIN_ADDR: begin
+					if (data_in < 60) begin
+						timer_minute <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				TMR_SEC_ADDR: begin
+					if (data_in < 60) begin
+						timer_second <= data_in[5:0];
+						error <= 0;
+					end
+					else error <= 1;
+				end
+				default: error <= 1;
+			endcase
 		end
 
 		else begin
+			error <= 0;
+
 			if (second_tick) begin
 				if (rtc_year_ismax)
 					rtc_year <= rtc_year >= 9999 ? 0 : rtc_year + 1;
