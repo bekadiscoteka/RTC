@@ -1,285 +1,299 @@
-`timescale 1ns/1ps
+// =============================================================
+//  tb_TIME_REPORTER.v
+//  Simple self-checking testbench for TIME_REPORTER
+//
+//  Strategy: clk_1hz is driven directly by the testbench
+//  (no need for the 50 MHz divider here — that's only needed
+//  on real hardware). Each "tick" task pulses clk_1hz once.
+// =============================================================
 
+`timescale 1ns / 1ps
 
-// ============================================================
-//  Testbench for TIME_REPORTER
-//  Tool:  iverilog time_tb.v time.v -o sim.out && vvp sim.out
-//  View:  gtkwave dump.vcd
-// ============================================================
+module tb_TIME_REPORTER;
 
-module time_tb;
+    // ---------------------------------------------------------
+    //  DUT signals
+    // ---------------------------------------------------------
+    reg         clk_1hz;
+    reg         rst_n;
+    reg         wr_en;
+    reg         alarm_en;
+    reg         timer_en;
+    reg  [13:0] data_in;
+    reg  [3:0]  addr;
 
-	localparam CLK_DIV = 100;
-
-    // ----------------------------------------------------------
-    // DUT signals
-    // ----------------------------------------------------------
     wire [13:0] rtc_year;
     wire [3:0]  rtc_month;
-    wire [4:0]  rtc_day, rtc_hour;
+    wire [4:0]  rtc_day;
+    wire [4:0]  rtc_hour;
     wire [2:0]  rtc_dow;
-    wire [5:0]  rtc_minute, rtc_second;
-    wire        alarm_out, timer_out, invalid_data_flag;
+    wire [5:0]  rtc_minute;
+    wire [5:0]  rtc_second;
+    wire        alarm_out;
+    wire        timer_out;
+    wire        error_tick;
 
-    reg         clk_50Mhz, rst_n, wr_en, alarm_en, timer_en;
-    reg [13:0]  data_in;
-    reg [3:0]   addr;
+    integer errors = 0;
 
-    // ----------------------------------------------------------
-    // Instantiate DUT with tiny DIV so 1 "second" = 4 clocks
-    // (override the pll parameter through defparam on the
-    //  internal instance — works in iverilog)
-    // ----------------------------------------------------------
+    // ---------------------------------------------------------
+    //  DUT instantiation
+    // ---------------------------------------------------------
     TIME_REPORTER dut (
-        .rtc_year(rtc_year), .rtc_month(rtc_month),
-        .rtc_day(rtc_day),   .rtc_hour(rtc_hour),
-        .rtc_dow(rtc_dow),
-        .rtc_minute(rtc_minute), .rtc_second(rtc_second),
-        .alarm_out(alarm_out),   .timer_out(timer_out),
-        .error(invalid_data_flag),
-        .clk_50Mhz(clk_50Mhz),  .rst_n(rst_n),
-        .wr_en(wr_en),           .alarm_en(alarm_en),
-        .timer_en(timer_en),
-        .data_in(data_in),       .addr(addr)
+        .clk_1hz    (clk_1hz),
+        .rst_n      (rst_n),
+        .wr_en      (wr_en),
+        .alarm_en   (alarm_en),
+        .timer_en   (timer_en),
+        .data_in    (data_in),
+        .addr       (addr),
+
+        .rtc_year   (rtc_year),
+        .rtc_month  (rtc_month),
+        .rtc_day    (rtc_day),
+        .rtc_hour   (rtc_hour),
+        .rtc_dow    (rtc_dow),
+        .rtc_minute (rtc_minute),
+        .rtc_second (rtc_second),
+
+        .alarm_out  (alarm_out),
+        .timer_out  (timer_out),
+        .error_tick (error_tick)
     );
 
-    // Override PLL divisor so 1 tick = 4 clock edges (fast sim)
-    defparam dut.pll_inst.DIV = CLK_DIV;
+    // ---------------------------------------------------------
+    //  Register address localparams (mirrors DUT)
+    // ---------------------------------------------------------
+    localparam RTC_Y_ADDR   = 4'h0,
+               RTC_M_ADDR   = 4'h1,
+               RTC_D_ADDR   = 4'h2,
+               RTC_H_ADDR   = 4'h3,
+               RTC_MIN_ADDR = 4'h4,
+               RTC_SEC_ADDR = 4'h5,
+               ALM_Y_ADDR   = 4'h6,
+               ALM_M_ADDR   = 4'h7,
+               ALM_D_ADDR   = 4'h8,
+               ALM_H_ADDR   = 4'h9,
+               ALM_MIN_ADDR = 4'hA,
+               ALM_SEC_ADDR = 4'hB,
+               TMR_H_ADDR   = 4'hC,
+               TMR_MIN_ADDR = 4'hD,
+               TMR_SEC_ADDR = 4'hE;
 
-    // ----------------------------------------------------------
-    // Clock: 10ns period = 100 MHz (period doesn't matter,
-    //         only DIV count matters for tick generation)
-    // ----------------------------------------------------------
-    initial clk_50Mhz = 0;
-    always #5 clk_50Mhz = ~clk_50Mhz;
+    // ---------------------------------------------------------
+    //  Helper tasks
+    // ---------------------------------------------------------
 
-    // ----------------------------------------------------------
-    // VCD dump for GTKWave
-    // ----------------------------------------------------------
-    initial begin
-        $dumpfile("dump.vcd");
-        $dumpvars(0, time_tb);
-    end
-
-    // ----------------------------------------------------------
-    // Helper task: write one register
-    // ----------------------------------------------------------
-    task write_reg;
-        input [3:0]  a;
-        input [13:0] d;
+    // Pulse clk_1hz for one rising edge (10ns period, plenty for sim)
+    task tick;
         begin
-            @(negedge clk_50Mhz);
+            clk_1hz = 1'b0;
+            #5;
+            clk_1hz = 1'b1;
+            #5;
+        end
+    endtask
+
+    // Write one register: drive addr/data, assert wr_en for exactly
+    // one tick (matches how the DUT samples wr_en on posedge clk_1hz)
+    task write_reg(input [3:0] a, input [13:0] d);
+        begin
             addr    = a;
             data_in = d;
-            wr_en   = 1;
-            @(negedge clk_50Mhz);
-            wr_en   = 0;
+            wr_en   = 1'b1;
+            tick;
+            wr_en   = 1'b0;
         end
     endtask
 
-    // ----------------------------------------------------------
-    // Helper task: wait N seconds (N * DIV clock cycles)
-    // ----------------------------------------------------------
-    task wait_seconds;
-        input integer n;
-        integer i;
+    task check_equal(input [255:0] name, input [31:0] got, input [31:0] exp);
         begin
-            for (i = 0; i < n; i = i + 1)
-                repeat(CLK_DIV) @(posedge clk_50Mhz);
+            if (got !== exp) begin
+                $display("  [FAIL] %0s : expected=%0d got=%0d  (time=%0t)",
+                          name, exp, got, $time);
+                errors = errors + 1;
+            end else begin
+                $display("  [PASS] %0s = %0d", name, got);
+            end
         end
     endtask
 
-    // ----------------------------------------------------------
-    // Helper task: check and print pass/fail
-    // ----------------------------------------------------------
-    task check;
-        input [127:0] test_name; // string passed as bits
-        input         condition;
-        begin
-            if (condition)
-                $display("  PASS  %s", test_name);
-            else
-                $display("  FAIL  %s", test_name);
-        end
-    endtask
-
-    // ----------------------------------------------------------
-    // Main test sequence
-    // ----------------------------------------------------------
-    integer errors;
-
+    // ---------------------------------------------------------
+    //  Test sequence
+    // ---------------------------------------------------------
     initial begin
-        // ---- init ----
-        rst_n   = 1; wr_en = 0; alarm_en = 0; timer_en = 0;
-        data_in = 0; addr  = 0;
-        errors  = 0;
+        $display("=========================================");
+        $display(" TIME_REPORTER testbench starting");
+        $display("=========================================");
 
-        // ======================================================
-        // TEST 1: Reset
-        // ======================================================
-        $display("\n=== TEST 1: Reset state ===");
+        // Initial values
+        clk_1hz  = 0;
+        rst_n    = 1;
+        wr_en    = 0;
+        alarm_en = 0;
+        timer_en = 0;
+        data_in  = 0;
+        addr     = 0;
+
+        // ----------------------------------------------------
+        // Test 1: Reset behaviour
+        // ----------------------------------------------------
+        $display("\n-- Test 1: async reset --");
         rst_n = 0;
-        repeat(4) @(negedge clk_50Mhz);
+        #20;                 // hold reset
         rst_n = 1;
-        @(negedge clk_50Mhz);
+        #1;
 
-        check("year  resets to 1990", rtc_year   == 14'd1990);
-        check("month resets to 1",    rtc_month  == 4'd1);
-        check("day   resets to 1",    rtc_day    == 5'd1);
-        check("hour  resets to 0",    rtc_hour   == 5'd0);
-        check("min   resets to 0",    rtc_minute == 6'd0);
-        check("sec   resets to 0",    rtc_second == 6'd0);
+        check_equal("rtc_year  after reset", rtc_year,   1990);
+        check_equal("rtc_month after reset", rtc_month,  1);
+        check_equal("rtc_day   after reset", rtc_day,    1);
+        check_equal("rtc_hour  after reset", rtc_hour,   0);
+        check_equal("rtc_minute after reset", rtc_minute, 0);
+        check_equal("rtc_second after reset", rtc_second, 0);
 
-        // ======================================================
-        // TEST 2: Register writes — set RTC to 2025-06-11 13:45:00
-        // ======================================================
-        $display("\n=== TEST 2: Register writes ===");
+        // ----------------------------------------------------
+        // Test 2: free-running seconds counter
+        // ----------------------------------------------------
+        $display("\n-- Test 2: seconds increment each tick --");
+        tick;
+        check_equal("rtc_second after 1 tick", rtc_second, 1);
+        tick;
+        tick;
+        check_equal("rtc_second after 3 ticks", rtc_second, 3);
 
-        write_reg(4'h0, 14'd2025);  // year
-        write_reg(4'h1, 4'd6);      // month = June
-        write_reg(4'h2, 5'd11);     // day = 11
-        write_reg(4'h3, 5'd13);     // hour = 13
-        write_reg(4'h4, 6'd45);     // minute = 45
-        write_reg(4'h5, 6'd0);      // second = 0
+        // ----------------------------------------------------
+        // Test 3: minute rollover (drive seconds to 59 then tick)
+        // ----------------------------------------------------
+        $display("\n-- Test 3: second->minute rollover --");
+        write_reg(RTC_SEC_ADDR, 59);
+        check_equal("rtc_second after write 59", rtc_second, 59);
+        check_equal("error_tick on valid write", error_tick, 0);
 
-        @(negedge clk_50Mhz);
-        check("year  = 2025", rtc_year   == 14'd2025);
-        check("month = 6",    rtc_month  == 4'd6);
-        check("day   = 11",   rtc_day    == 5'd11);
-        check("hour  = 13",   rtc_hour   == 5'd13);
-        check("min   = 45",   rtc_minute == 6'd45);
-        check("sec   = 0",    rtc_second == 6'd0);
+        tick;  // 59 -> 0, minute should increment
+        check_equal("rtc_second after rollover", rtc_second, 0);
+        check_equal("rtc_minute after rollover", rtc_minute, 1);
 
-        // Check day-of-week: 2025-06-11 is a Wednesday (dow=3)
-        check("dow   = 3 (Wed)", rtc_dow == 3'd3);
-	$display(" rtc_dow = %d", rtc_dow);
+        // ----------------------------------------------------
+        // Test 4: invalid write rejected (error_tick asserted)
+        // ----------------------------------------------------
+        $display("\n-- Test 4: out-of-range write rejected --");
+        write_reg(RTC_SEC_ADDR, 70);   // invalid (>59)
+        check_equal("error_tick on invalid sec write", error_tick, 1);
+        check_equal("rtc_second unchanged on bad write", rtc_second, 0);
 
-        // ======================================================
-        // TEST 3: Invalid data rejection
-        // ======================================================
-        $display("\n=== TEST 3: Invalid data ===");
+        // ----------------------------------------------------
+        // Test 5: hour/day/month/year rollover chain
+        //   Set time to 23:59:59 on Dec 31 and tick once
+        // ----------------------------------------------------
+        $display("\n-- Test 5: full rollover chain (year boundary) --");
+        write_reg(RTC_Y_ADDR,   2024);
+        write_reg(RTC_M_ADDR,   12);
+        write_reg(RTC_D_ADDR,   31);
+        write_reg(RTC_H_ADDR,   23);
+        write_reg(RTC_MIN_ADDR, 59);
+        write_reg(RTC_SEC_ADDR, 59);
 
-        // Bad year (< 1990)
-        write_reg(4'h0, 14'd1985);
-        check("invalid year rejected",  invalid_data_flag == 1);
-        check("year unchanged",         rtc_year == 14'd2025);
-        @(negedge clk_50Mhz);
+        check_equal("year before rollover",  rtc_year,  2024);
+        check_equal("month before rollover", rtc_month, 12);
+        check_equal("day before rollover",   rtc_day,   31);
 
-        // Bad month (= 0)
-        write_reg(4'h1, 4'd0);
-        check("invalid month rejected", invalid_data_flag == 1);
-        check("month unchanged",        rtc_month == 4'd6);
-        @(negedge clk_50Mhz);
+        tick;  // the big rollover: 23:59:59 -> 00:00:00, day/month/year roll
 
-        // Bad hour (>= 24)
-        write_reg(4'h3, 14'd24);
-        check("invalid hour rejected",  invalid_data_flag == 1);
-        check("hour unchanged",         rtc_hour == 5'd13);
-        @(negedge clk_50Mhz);
+        check_equal("rtc_second after full rollover", rtc_second, 0);
+        check_equal("rtc_minute after full rollover", rtc_minute, 0);
+        check_equal("rtc_hour   after full rollover", rtc_hour,   0);
+        check_equal("rtc_day    after full rollover", rtc_day,    1);
+        check_equal("rtc_month  after full rollover", rtc_month,  1);
+        check_equal("rtc_year   after full rollover", rtc_year,   2025);
 
-        // Bad minute (>= 60)
-        write_reg(4'h4, 14'd60);
-        check("invalid minute rejected",invalid_data_flag == 1);
-        @(negedge clk_50Mhz);
+        // ----------------------------------------------------
+        // Test 6: leap year Feb 29 (2024 is a leap year)
+        // ----------------------------------------------------
+        $display("\n-- Test 6: leap year Feb 28 -> Feb 29 --");
+        write_reg(RTC_Y_ADDR,   2024);
+        write_reg(RTC_M_ADDR,   2);
+        write_reg(RTC_D_ADDR,   28);
+        write_reg(RTC_H_ADDR,   23);
+        write_reg(RTC_MIN_ADDR, 59);
+        write_reg(RTC_SEC_ADDR, 59);
 
-        // ======================================================
-        // TEST 4: Tick / rollover
-        // Set time to 23:59:58, wait 3 seconds,
-        // expect rollover to next day 00:00:01
-        // ======================================================
-        $display("\n=== TEST 4: Rollover 23:59:58 -> 00:00:01 ===");
+        tick;  // should roll to Feb 29 (leap year), not Mar 1
 
-        write_reg(4'h3, 5'd23);
-        write_reg(4'h4, 6'd59);
-        write_reg(4'h5, 6'd58);
+        check_equal("leap year day rolls to 29", rtc_day,   29);
+        check_equal("leap year month stays Feb",  rtc_month, 2);
 
-        wait_seconds(3);
-        @(negedge clk_50Mhz);
+        // ----------------------------------------------------
+        // Test 7: alarm match
+        // ----------------------------------------------------
+        $display("\n-- Test 7: alarm fires on exact match --");
+        write_reg(RTC_Y_ADDR,   2025);
+        write_reg(RTC_M_ADDR,   6);
+        write_reg(RTC_D_ADDR,   15);
+        write_reg(RTC_H_ADDR,   10);
+        write_reg(RTC_MIN_ADDR, 30);
+        write_reg(RTC_SEC_ADDR, 0);
 
-        check("hour  rolled to 0",  rtc_hour   == 5'd0);
-        check("min   rolled to 0",  rtc_minute == 6'd0);
-        check("sec   = 1",          rtc_second == 6'd1);
-        check("day   incremented",  rtc_day    == 5'd12);
-	$display("hour: %d, minute=%d, second=%d, day=%d", rtc_hour, rtc_minute, rtc_second, rtc_day);
-
-        // ======================================================
-        // TEST 5: Alarm trigger
-        // Set RTC to 2025-06-15 08:00:00
-        // Set alarm to same time, enable it
-        // ======================================================
-        $display("\n=== TEST 5: Alarm trigger ===");
-
-        // Set RTC
-        write_reg(4'h0, 14'd2025);
-        write_reg(4'h1, 4'd6);
-        write_reg(4'h2, 5'd15);
-        write_reg(4'h3, 5'd8);
-        write_reg(4'h4, 6'd0);
-        write_reg(4'h5, 6'd0);
-
-        // Set alarm to same datetime
-        write_reg(4'h6, 14'd2025);  // alarm year
-        write_reg(4'h7, 4'd6);      // alarm month
-        write_reg(4'h8, 5'd15);     // alarm day
-        write_reg(4'h9, 5'd8);      // alarm hour
-        write_reg(4'ha, 6'd0);      // alarm minute
-        write_reg(4'hb, 6'd0);      // alarm second
+        write_reg(ALM_Y_ADDR,   2025);
+        write_reg(ALM_M_ADDR,   6);
+        write_reg(ALM_D_ADDR,   15);
+        write_reg(ALM_H_ADDR,   10);
+        write_reg(ALM_MIN_ADDR, 30);
+        write_reg(ALM_SEC_ADDR, 0);
 
         alarm_en = 1;
-        @(negedge clk_50Mhz);
-        check("alarm fires at exact match", alarm_out == 1);
+        #1;
+        check_equal("alarm_out on exact match", alarm_out, 1);
 
-        // Advance one second — alarm should be silent
-        wait_seconds(1);
-        @(negedge clk_50Mhz);
-        check("alarm silent after tick", alarm_out == 0);
+        tick; // second advances, match broken
+        check_equal("alarm_out clears after tick", alarm_out, 0);
         alarm_en = 0;
 
-        // ======================================================
-        // TEST 6: Timer countdown
-        // Load timer = 0h 0m 3s, enable, wait 4 seconds,
-        // timer_out should fire at 0
-        // ======================================================
-        $display("\n=== TEST 6: Timer countdown ===");
-
-        write_reg(4'hc, 5'd0);   // timer_hour  = 0
-        write_reg(4'hd, 6'd0);   // timer_minute = 0
-        write_reg(4'he, 6'd3);   // timer_second = 3
+        // ----------------------------------------------------
+        // Test 8: countdown timer reaches zero
+        // ----------------------------------------------------
+        $display("\n-- Test 8: timer counts down to zero --");
+        write_reg(TMR_H_ADDR,   0);
+        write_reg(TMR_MIN_ADDR, 0);
+        write_reg(TMR_SEC_ADDR, 2);
 
         timer_en = 1;
-        @(negedge clk_50Mhz);
-        check("timer not expired yet", timer_out == 0);
+        check_equal("timer_out before expiry", timer_out, 0);
 
-        wait_seconds(3);
-        @(negedge clk_50Mhz);
-        check("timer expired (timer_out=1)", timer_out == 1);
+        tick;  // 2 -> 1
+        check_equal("timer_out at 1s remaining", timer_out, 0);
 
+        tick;  // 1 -> 0
+        check_equal("timer_out at 0s remaining", timer_out, 1);
         timer_en = 0;
 
-        // ======================================================
-        // DONE
-        // ======================================================
-        $display("\n=== Simulation complete ===\n");
-        #100 $finish;
-    end
+        // ----------------------------------------------------
+        // Test 9: day-of-week sanity check
+        //   2025-06-15 is a Sunday (dow = 0)
+        // ----------------------------------------------------
+        $display("\n-- Test 9: day_of_week (Zeller) sanity check --");
+        write_reg(RTC_Y_ADDR, 2025);
+        write_reg(RTC_M_ADDR, 6);
+        write_reg(RTC_D_ADDR, 15);
+        #1;
+        check_equal("2025-06-15 is Sunday (dow=0)", rtc_dow, 0);
 
-    // ----------------------------------------------------------
-    // Timeout watchdog — kill sim if it hangs
-    // ----------------------------------------------------------
-    initial begin
-        #500_000;
-        $display("TIMEOUT — simulation hung");
+        // ----------------------------------------------------
+        // Wrap up
+        // ----------------------------------------------------
+        $display("\n=========================================");
+        if (errors == 0)
+            $display(" ALL TESTS PASSED");
+        else
+            $display(" %0d TEST(S) FAILED", errors);
+        $display("=========================================");
+
         $finish;
     end
 
-    // ----------------------------------------------------------
-    // Live monitor — prints every second tick
-    // ----------------------------------------------------------
-    always @(posedge dut.second_tick) begin
-        $display("[tick] %04d-%02d-%02d (dow=%0d) %02d:%02d:%02d  | timer=%02d:%02d:%02d",
-            rtc_year, rtc_month, rtc_day, rtc_dow,
-            rtc_hour, rtc_minute, rtc_second,
-            dut.timer_hour, dut.timer_minute, dut.timer_second);
+    // Safety timeout in case of hang
+    initial begin
+        #100000;
+        $display("[TIMEOUT] testbench did not finish in time");
+        $finish;
     end
 
 endmodule

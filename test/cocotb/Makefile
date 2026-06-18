@@ -1,9 +1,18 @@
-TOPLEVEL_LANG   = verilog
-# Wrapper instantiates TIME_REPORTER with PLL DIV overridden to 2
-VERILOG_SOURCES = $(PWD)/../../time.v $(PWD)/tb_top.v
+# =============================================================
+#  Makefile — cocotb testbench for TIME_REPORTER
+#
+#  Usage:
+#      make            # run with default sim (icarus)
+#      make SIM=icarus # explicit
+#      make clean
+# =============================================================
 
-TOPLEVEL = tb_top
-MODULE   = test_rtc
-SIM     ?= icarus
+SIM ?= icarus
+TOPLEVEL_LANG ?= verilog
+
+VERILOG_SOURCES = $(PWD)/../../time.v
+
+TOPLEVEL = TIME_REPORTER
+MODULE   = test_time_reporter
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
